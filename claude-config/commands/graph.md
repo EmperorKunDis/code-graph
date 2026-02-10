@@ -2,7 +2,9 @@
 
 Run a targeted query on the code graph. Usage: `/graph <command> <args>`
 
-Available commands: file, impact, deps, dependents, model, hubs, cluster, path, search, stats, dead-code, risky-files, endpoint, overview
+Available commands: file, impact, deps, dependents, model, hubs, cluster, path, search, stats, dead-code, risky-files, endpoint, overview, report, changes
+
+Flags: `--all` (show all results, no truncation), `--top N` (limit ranked results)
 
 ## Instructions
 
