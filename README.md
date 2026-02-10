@@ -158,6 +158,8 @@ The installed hook in `settings.json` makes Claude Code automatically query the 
 | `/graph endpoint <path>` | Full request chain for an endpoint |
 | `/graph cluster <path>` | Show connected component |
 | `/graph stats` | Project statistics |
+| `/graph report` | **Full report** — overview + risks + dead code + gaps in one call |
+| `/graph changes <f1> <f2>` | Pre-change check for multiple files at once |
 
 ### Example: Impact Analysis
 
