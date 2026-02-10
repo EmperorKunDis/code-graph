@@ -19,10 +19,12 @@ Commands:
     path <from> <to>      Find connection path between two files
     search <query>        Search nodes by name/file pattern
     stats                 Show project statistics summary
-    dead-code             Find potentially unused/isolated nodes
+    dead-code [--all]     Find potentially unused/isolated nodes
     risky-files [--top N] Rank files by change risk (default top 20)
     endpoint <path>       Show endpoint details and full chain
     overview              Compact project architecture overview
+    report                Full project report (overview + risks + dead code + gaps)
+    changes <f1> <f2> ... Pre-change analysis for multiple files at once
 """
 
 import argparse
@@ -41,7 +43,11 @@ class GraphQuery:
             self.data = json.load(f)
 
         self.nodes = {n["id"]: n for n in self.data["nodes"]}
-        self.edges = self.data["edges"]
+
+        # Filter out ghost edges (pointing to non-existent nodes)
+        self.edges = [e for e in self.data["edges"]
+                      if e["source"] in self.nodes and e["target"] in self.nodes]
+        self._ghost_edges = len(self.data["edges"]) - len(self.edges)
 
         # Build adjacency lists
         self.outgoing = defaultdict(list)  # source -> [(edge, target_id)]
@@ -463,15 +469,17 @@ class GraphQuery:
             f"📊 Project: {self.data.get('project', 'Unknown')}",
             f"   Generated: {self.data.get('generated_at', 'Unknown')}",
             f"   Nodes: {stats.get('total_nodes', 0)}",
-            f"   Edges: {stats.get('total_edges', 0)}",
-            "",
-            "  Node Types:",
+            f"   Edges: {len(self.edges)}",
         ]
-        for ntype, count in (stats.get("node_types") or {}).items():
+        if self._ghost_edges > 0:
+            output.append(f"   ⚠️  Ghost edges filtered: {self._ghost_edges} (edges pointing to non-existent nodes)")
+
+        output.append("\n  Node Types:")
+        for ntype, count in sorted((stats.get("node_types") or {}).items(), key=lambda x: -x[1]):
             output.append(f"    {ntype}: {count}")
 
         output.append("\n  Edge Types:")
-        for etype, count in (stats.get("edge_types") or {}).items():
+        for etype, count in sorted((stats.get("edge_types") or {}).items(), key=lambda x: -x[1]):
             output.append(f"    {etype}: {count}")
 
         # Most connected
@@ -483,7 +491,7 @@ class GraphQuery:
 
         return "\n".join(output)
 
-    def cmd_dead_code(self) -> str:
+    def cmd_dead_code(self, show_all: bool = False) -> str:
         """Find potentially unused/isolated nodes."""
         connected = set()
         for e in self.edges:
@@ -492,7 +500,7 @@ class GraphQuery:
 
         isolated = [n for n in self.nodes.values()
                     if n["id"] not in connected
-                    and n["type"] not in ("config", "test")]
+                    and n["type"] not in ("config",)]
 
         # Also find nodes with only outgoing (nothing depends on them)
         no_dependents = []
@@ -506,20 +514,30 @@ class GraphQuery:
         output = [f"🗑️  Potential Dead Code Analysis:\n"]
 
         if isolated:
-            output.append(f"  Completely isolated ({len(isolated)} nodes):")
-            for n in isolated[:15]:
-                output.append(f"    [{n['type']}] {n['label']} — {n.get('file', '')}")
-            if len(isolated) > 15:
-                output.append(f"    ... and {len(isolated) - 15} more")
+            # Group by type for readability
+            by_type = defaultdict(list)
+            for n in isolated:
+                by_type[n["type"]].append(n)
+
+            output.append(f"  Completely isolated ({len(isolated)} nodes):\n")
+            for ntype, type_nodes in sorted(by_type.items(), key=lambda x: -len(x[1])):
+                output.append(f"  [{ntype}] ({len(type_nodes)}):")
+                limit = len(type_nodes) if show_all else min(len(type_nodes), 8)
+                for n in type_nodes[:limit]:
+                    output.append(f"    {n['label']} — {n.get('file', '')}")
+                if not show_all and len(type_nodes) > 8:
+                    output.append(f"    ... +{len(type_nodes) - 8} more (use --all to see all)")
+                output.append("")
         else:
             output.append("  No completely isolated nodes ✅")
 
         if no_dependents:
             output.append(f"\n  No incoming dependencies ({len(no_dependents)} nodes):")
-            for n in no_dependents[:15]:
+            limit = len(no_dependents) if show_all else min(len(no_dependents), 15)
+            for n in no_dependents[:limit]:
                 output.append(f"    [{n['type']}] {n['label']} — {n.get('file', '')}")
-            if len(no_dependents) > 15:
-                output.append(f"    ... and {len(no_dependents) - 15} more")
+            if not show_all and len(no_dependents) > 15:
+                output.append(f"    ... +{len(no_dependents) - 15} more (use --all to see all)")
 
         return "\n".join(output)
 
@@ -656,6 +674,107 @@ class GraphQuery:
 
         return "\n".join(output)
 
+    def cmd_report(self) -> str:
+        """Full project report — everything Claude needs in one call."""
+        sections = []
+
+        # 1. Overview
+        sections.append(self.cmd_overview())
+        sections.append("")
+
+        # 2. Ghost edges warning
+        if self._ghost_edges > 0:
+            sections.append(f"⚠️  {self._ghost_edges} ghost edges filtered (edges pointing to non-existent nodes)")
+            sections.append("")
+
+        # 3. Top 10 riskiest files
+        sections.append(self.cmd_risky_files(10))
+        sections.append("")
+
+        # 4. Top 10 hubs
+        sections.append(self.cmd_hubs(10))
+        sections.append("")
+
+        # 5. Dead code summary (compact)
+        connected = set()
+        for e in self.edges:
+            connected.add(e["source"])
+            connected.add(e["target"])
+        isolated = [n for n in self.nodes.values()
+                    if n["id"] not in connected and n["type"] not in ("config",)]
+        by_type = defaultdict(list)
+        for n in isolated:
+            by_type[n["type"]].append(n)
+        sections.append(f"🗑️  Dead Code: {len(isolated)} isolated nodes")
+        for ntype, nodes in sorted(by_type.items(), key=lambda x: -len(x[1])):
+            labels = [n["label"] for n in nodes[:5]]
+            more = f" +{len(nodes)-5}" if len(nodes) > 5 else ""
+            sections.append(f"  [{ntype}] ({len(nodes)}): {', '.join(labels)}{more}")
+        sections.append("")
+
+        # 6. Weak spots — high-risk nodes with no tests nearby
+        sections.append("🧪 Coverage Gaps (high-risk files without test connections):")
+        test_connected = set()
+        for e in self.edges:
+            src = self.nodes.get(e["source"], {})
+            tgt = self.nodes.get(e["target"], {})
+            if src.get("type") == "test":
+                test_connected.add(e["target"])
+            if tgt.get("type") == "test":
+                test_connected.add(e["source"])
+        gaps = []
+        for nid, count in self.connection_counts.most_common(50):
+            n = self.nodes.get(nid, {})
+            if (count >= 8 and n.get("type") not in ("test", "config", "router", "component")
+                    and nid not in test_connected):
+                gaps.append(n)
+        if gaps:
+            for n in gaps[:10]:
+                risk, _ = self.get_risk_level(n["id"])
+                sections.append(f"  {risk} {n['label']} [{n['type']}] — {n.get('file', '')}")
+        else:
+            sections.append("  All high-risk files have test coverage ✅")
+
+        return "\n".join(sections)
+
+    def cmd_changes(self, *paths: str) -> str:
+        """Pre-change analysis for multiple files at once."""
+        if not paths:
+            return "❌ Provide file paths to analyze"
+
+        output = [f"📋 Pre-Change Analysis for {len(paths)} files:\n"]
+        all_affected = set()
+
+        for path in paths:
+            nodes = self.find_nodes_by_file(path)
+            if not nodes:
+                output.append(f"  ❌ '{path}' — not found in graph")
+                continue
+
+            n = nodes[0]
+            risk, detail = self.get_risk_level(n["id"])
+            incoming = len(self.incoming.get(n["id"], []))
+            outgoing = len(self.outgoing.get(n["id"], []))
+            output.append(f"  {risk} {n['label']} ({incoming}↓ {outgoing}↑) — {n.get('file', '')}")
+
+            # Collect affected
+            for e, sid in self.incoming.get(n["id"], []):
+                all_affected.add(sid)
+
+        if all_affected:
+            output.append(f"\n  📊 Total files potentially affected: {len(all_affected)}")
+            # Group by type
+            by_type = defaultdict(list)
+            for nid in all_affected:
+                node = self.nodes.get(nid, {})
+                by_type[node.get("type", "?")].append(node)
+            for ntype, nodes in sorted(by_type.items(), key=lambda x: -len(x[1])):
+                labels = [n.get("label", "?") for n in nodes[:5]]
+                more = f" +{len(nodes)-5}" if len(nodes) > 5 else ""
+                output.append(f"    [{ntype}] {', '.join(labels)}{more}")
+
+        return "\n".join(output)
+
 
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 
@@ -671,6 +790,8 @@ def main():
                         help="Path to code_graph.json (default: .code_graph.json)")
     parser.add_argument("--top", "-n", type=int, default=None,
                         help="Number of results for ranked commands")
+    parser.add_argument("--all", "-a", action="store_true",
+                        help="Show all results (no truncation)")
 
     args = parser.parse_args()
 
@@ -719,14 +840,18 @@ def main():
             print(gq.cmd_search(" ".join(cmd_args)))
         elif cmd == "stats":
             print(gq.cmd_stats())
-        elif cmd == "dead_code" or cmd == "dead-code":
-            print(gq.cmd_dead_code())
-        elif cmd == "risky_files" or cmd == "risky-files":
+        elif cmd == "dead_code":
+            print(gq.cmd_dead_code(show_all=args.all))
+        elif cmd == "risky_files":
             print(gq.cmd_risky_files(args.top or 20))
         elif cmd == "endpoint" and cmd_args:
             print(gq.cmd_endpoint(cmd_args[0]))
         elif cmd == "overview":
             print(gq.cmd_overview())
+        elif cmd == "report":
+            print(gq.cmd_report())
+        elif cmd == "changes" and cmd_args:
+            print(gq.cmd_changes(*cmd_args))
         else:
             parser.print_help()
             sys.exit(1)
