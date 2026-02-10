@@ -29,6 +29,8 @@ python3 .claude/skills/code-graph/scripts/query_graph.py impact <path-being-edit
 | Riskiest files | `python3 .claude/skills/code-graph/scripts/query_graph.py risky-files` |
 | Find dead code | `python3 .claude/skills/code-graph/scripts/query_graph.py dead-code` |
 | Connection path between files | `python3 .claude/skills/code-graph/scripts/query_graph.py path <from> <to>` |
+| Full project report (one call) | `python3 .claude/skills/code-graph/scripts/query_graph.py report` |
+| Pre-check multiple files | `python3 .claude/skills/code-graph/scripts/query_graph.py changes <f1> <f2>` |
 | Regenerate graph | `/init-graph` |
 
 ### Risk Levels
