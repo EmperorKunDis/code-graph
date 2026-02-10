@@ -45,6 +45,8 @@ python3 .claude/skills/code-graph/scripts/query_graph.py dependents <path>
 | `risky-files [--top N]` | Risk ranking | Files ranked by change risk score |
 | `endpoint <path>` | Endpoint chain | Full request chain: endpoint → service → model → cache |
 | `overview` | Architecture | Compact project structure overview |
+| `report` | Full report | **One call**: overview + risks + dead code + coverage gaps |
+| `changes <f1> <f2>...` | Multi-file check | Pre-change analysis for multiple files at once |
 
 ## When to Use Which Command
 
