@@ -110,6 +110,7 @@ class GraphBuilder:
         self.edges: list[dict] = []
         self.file_id_map: dict[str, str] = {}  # filepath -> node_id
         self._edge_set: set[tuple] = set()  # dedup edges
+        self._pending_inheritance: list[tuple] = []  # (class_id, base_name)
 
     def add_node(self, node_id: str, label: str, node_type: str,
                  filepath: str = "", line: int = 0, **metadata) -> str:
@@ -443,14 +444,26 @@ class PythonAnalyzer:
             self.graph.add_edge(file_id, node_id, "middleware_chain",
                                 relation="defines")
 
-        # Track inheritance
+        # Track inheritance — edges resolved in post-processing
         for base_name in bases:
-            if base_name and base_name not in {"object", "type", "Exception"}:
-                base_id = make_id(f"class:{base_name}")
+            if base_name and base_name not in {"object", "type", "Exception",
+                                                "Model", "models.Model", "Document",
+                                                "Base", "DeclarativeBase",
+                                                "AbstractBaseUser", "AbstractUser",
+                                                "ViewSet", "ModelViewSet", "APIView",
+                                                "GenericAPIView", "ListAPIView",
+                                                "CreateAPIView", "RetrieveAPIView",
+                                                "UpdateAPIView", "DestroyAPIView",
+                                                "View", "TemplateView", "ListView",
+                                                "DetailView", "FormView",
+                                                "Serializer", "ModelSerializer",
+                                                "HyperlinkedModelSerializer"}:
                 class_id = make_id(f"{rel_path}:{class_name}")
                 if class_id in self.graph.nodes:
-                    self.graph.add_edge(class_id, base_id, "inherits",
-                                        base_class=base_name)
+                    # Store for deferred resolution
+                    self.graph._pending_inheritance.append(
+                        (class_id, base_name)
+                    )
 
     def _analyze_function(self, node, filepath: str,
                           file_id: str, rel_path: str):
