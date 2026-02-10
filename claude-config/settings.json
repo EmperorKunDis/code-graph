@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Replace|Write|Create",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f .code_graph.json ]; then python3 .claude/skills/code-graph/scripts/query_graph.py file \"$CLAUDE_FILE_PATH\" 2>/dev/null | head -20; fi"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Replace|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[code-graph] File modified. Run /init-graph to update the graph after significant changes.'"
+          }
+        ]
+      }
+    ]
+  }
+}
