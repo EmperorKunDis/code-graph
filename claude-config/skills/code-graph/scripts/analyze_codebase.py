@@ -167,8 +167,15 @@ class GraphBuilder:
                      "pyproject.toml", "setup.py", "setup.cfg", "manage.py",
                      "docker-compose.yml", "dockerfile", "makefile", ".eslintrc.js",
                      "babel.config.js", "jest.config.js", "vite.config.ts",
-                     "tailwind.config.js", "next.config.js", "nuxt.config.ts"}:
+                     "tailwind.config.js", "next.config.js", "nuxt.config.ts",
+                     "environment.ts", "environment.prod.ts"}:
             return "config"
+
+        # Barrel exports / index files — BEFORE models check
+        # These re-export from other files and shouldn't be classified by directory
+        if name in {"index.ts", "index.tsx", "index.js", "index.jsx",
+                     "__init__.py", "index.py", "public-api.ts", "public_api.ts"}:
+            return "file"
 
         # Routers / URL configs
         if any(p in lower for p in ["urls.py", "routes.", "router.", "routing."]):
@@ -222,6 +229,20 @@ class GraphBuilder:
         if any(p in lower for p in ["templates/", "template.", ".html", ".jinja"]):
             return "template"
 
+        # Angular / framework-specific patterns (before generic component check)
+        if name.endswith(".component.ts") or name.endswith(".component.tsx"):
+            return "component"
+        if name.endswith(".store.ts") or name.endswith(".state.ts"):
+            return "service"  # stores are state services
+        if name.endswith(".guard.ts") or name.endswith(".interceptor.ts"):
+            return "middleware"
+        if name.endswith(".pipe.ts") or name.endswith(".directive.ts"):
+            return "utility"
+        if name.endswith(".resolver.ts"):
+            return "service"
+        if name.endswith(".module.ts"):
+            return "config"
+
         # Components (frontend)
         if any(p in lower for p in ["components/", "component.", ".vue", ".svelte",
                                      ".jsx", ".tsx"]):
@@ -229,8 +250,47 @@ class GraphBuilder:
 
         return "file"
 
+    def resolve_inheritance(self):
+        """Resolve deferred inheritance edges after all files are analyzed."""
+        # Build label -> node_id lookup
+        label_to_nodes = defaultdict(list)
+        for nid, node in self.nodes.items():
+            label_to_nodes[node["label"]].append(nid)
+
+        resolved = 0
+        for class_id, base_name in self._pending_inheritance:
+            # Find matching base class node by label
+            clean_name = base_name.split(".")[-1]  # "models.Model" -> "Model"
+            candidates = label_to_nodes.get(clean_name, [])
+            for candidate_id in candidates:
+                if candidate_id != class_id:
+                    self.add_edge(class_id, candidate_id, "inherits",
+                                  base_class=base_name)
+                    resolved += 1
+                    break
+
+        self._pending_inheritance.clear()
+        return resolved
+
+    def validate_edges(self) -> int:
+        """Remove edges pointing to non-existent nodes. Returns count removed."""
+        valid_ids = set(self.nodes.keys())
+        before = len(self.edges)
+        self.edges = [e for e in self.edges
+                      if e["source"] in valid_ids and e["target"] in valid_ids]
+        # Also clean the dedup set
+        self._edge_set = {(e["source"], e["target"], e["type"]) for e in self.edges}
+        removed = before - len(self.edges)
+        if removed > 0:
+            print(f"     ⚠️  Removed {removed} ghost edges (pointing to non-existent nodes)")
+        return removed
+
     def to_json(self) -> dict:
         """Export the graph as a JSON-serializable dict."""
+        # Post-processing: resolve deferred edges and validate
+        self.resolve_inheritance()
+        self.validate_edges()
+
         node_type_counts = defaultdict(int)
         for n in self.nodes.values():
             node_type_counts[n["type"]] += 1
